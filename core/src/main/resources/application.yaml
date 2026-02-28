@@ -1,0 +1,31 @@
+rate-limit:
+  rules:
+    - name: global-limit
+      scope: GLOBAL
+      algorithm: token
+      capacity: 20
+      refillPerSecond: 10
+
+    - name: user-limit
+      scope: USER
+      algorithm: sliding-counter
+      maxRequests: 10
+      windowMillis: 60000
+
+    - name: endpoint-limit
+      scope: ENDPOINT
+      algorithm: fixed
+      maxRequests: 5
+      windowMillis: 10000
+
+    - name: user-endpoint-limit
+      scope: USER_ENDPOINT
+      algorithm: sliding-log
+      maxRequests: 3
+      windowMillis: 10000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
