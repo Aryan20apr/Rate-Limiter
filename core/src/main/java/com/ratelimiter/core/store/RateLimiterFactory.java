@@ -10,7 +10,6 @@ import com.ratelimiter.core.strategy.TokenBucketRateLimiter;
 
 public class RateLimiterFactory {
 
-    private static final int STRIPE_COUNT = 64;
     private static final int MAX_KEYS = 10_000;
     private static final long TTL_MILLIS = 60_000;
 
@@ -23,31 +22,31 @@ public class RateLimiterFactory {
                 new FixedWindowRateLimiter(
                 rule.getMaxRequests(),
                 rule.getWindowMillis(),
-                STRIPE_COUNT, MAX_KEYS, TTL_MILLIS);
+                MAX_KEYS, TTL_MILLIS);
 
             case "sliding-log" ->
                 new SlidingWindowLogRateLimiter(
                 rule.getMaxRequests(),
                 rule.getWindowMillis(),
-                STRIPE_COUNT, MAX_KEYS, TTL_MILLIS, 1000);
+                MAX_KEYS, TTL_MILLIS, 1000);
 
             case "sliding-counter" ->
                 new SlidingWindowCounterRateLimiter(
                 rule.getMaxRequests(),
                 rule.getWindowMillis(),
-                STRIPE_COUNT, MAX_KEYS, TTL_MILLIS);
+                MAX_KEYS, TTL_MILLIS);
 
             case "token" ->
                 new TokenBucketRateLimiter(
                 rule.getCapacity(),
                 rule.getRefillPerSecond(),
-                STRIPE_COUNT, MAX_KEYS, TTL_MILLIS);
+                MAX_KEYS, TTL_MILLIS);
 
             case "leaky" ->
                 new LeakyBucketRateLimiter(
                 rule.getCapacity(),
                 rule.getRefillPerSecond(),
-                STRIPE_COUNT, MAX_KEYS, TTL_MILLIS);
+                MAX_KEYS, TTL_MILLIS);
 
             default ->
                 throw new IllegalArgumentException(

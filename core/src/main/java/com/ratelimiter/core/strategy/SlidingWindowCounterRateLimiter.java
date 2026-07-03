@@ -1,15 +1,14 @@
 package com.ratelimiter.core.strategy;
-import java.util.concurrent.atomic.LongAdder;
 
 import com.ratelimiter.core.dtos.RateLimitResult;
 
 public class SlidingWindowCounterRateLimiter extends AbstractRateLimiter {
 
     private static class CounterState implements ExpirableState {
-        volatile long windowStart;
-        final LongAdder currentCount = new LongAdder();
-        volatile long previousCount;
-        volatile long lastAccess;
+        long windowStart;
+        long currentCount;
+        long previousCount;
+        long lastAccess;
 
         @Override
         public long getLastAccessNanos() {
@@ -22,10 +21,9 @@ public class SlidingWindowCounterRateLimiter extends AbstractRateLimiter {
 
     public SlidingWindowCounterRateLimiter(long maxRequests,
                                              long windowMillis,
-                                             int stripeCount,
                                              int maxKeys,
                                              long ttlMillis) {
-        super(stripeCount, maxKeys, ttlMillis);
+        super(maxKeys, ttlMillis);
         this.maxRequests = maxRequests;
         this.windowNanos = windowMillis * 1_000_000;
     }
@@ -42,42 +40,45 @@ public class SlidingWindowCounterRateLimiter extends AbstractRateLimiter {
 
         long now = System.nanoTime();
 
-        CounterState state = (CounterState) store.computeIfAbsent(key, k -> {
-            CounterState cs = new CounterState();
-            cs.windowStart = now;
-            cs.lastAccess = now;
-            return cs;
-        });
+        final RateLimitResult[] out = {null};
 
-        Object lock = stripe(key);
-
-        synchronized (lock) {
+        store.compute(key, (k, existing) -> {
+            CounterState state;
+            if (existing == null) {
+                state = new CounterState();
+                state.windowStart = now;
+            } else {
+                state = (CounterState) existing;
+            }
 
             state.lastAccess = now;
 
             long elapsed = now - state.windowStart;
 
             if (elapsed >= windowNanos) {
-                state.previousCount = state.currentCount.sum();
-                state.currentCount.reset();
+                state.previousCount = state.currentCount;
+                state.currentCount = 0;
                 state.windowStart = now;
                 elapsed = 0;
             }
 
             double weight = (double) elapsed / windowNanos;
-            long estimated = (long) (state.previousCount * (1 - weight))
-                    + state.currentCount.sum();
+            long estimated = (long) (state.previousCount * (1 - weight)) + state.currentCount;
 
             if (estimated >= maxRequests) {
                 long retryMillis = (windowNanos - elapsed) / 1_000_000;
                 long resetAt = (System.currentTimeMillis() + retryMillis) / 1000;
-                return new RateLimitResult(false, 0, retryMillis, limit, resetAt);
+                out[0] = new RateLimitResult(false, 0, retryMillis, limit, resetAt);
+                return state;
             }
 
-            state.currentCount.increment();
+            state.currentCount++;
 
             long resetAt = (System.currentTimeMillis() / 1000) + 60;
-            return new RateLimitResult(true, maxRequests - estimated - 1, 0, limit, resetAt);
-        }
+            out[0] = new RateLimitResult(true, maxRequests - estimated - 1, 0, limit, resetAt);
+            return state;
+        });
+
+        return out[0];
     }
 }

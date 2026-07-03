@@ -3,26 +3,34 @@ package com.ratelimiter.core.strategy;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
-public abstract class AbstractRateLimiter implements RateLimiter {
+public abstract class AbstractRateLimiter implements RateLimiter, AutoCloseable {
 
     protected final ConcurrentHashMap<String, Object> store = new ConcurrentHashMap<>();
 
-    protected final Object[] stripes;
     protected final int maxKeys;
     protected final long ttlNanos;
 
-    protected AbstractRateLimiter(int stripeCount, int maxKeys, long ttlMillis) {
-        this.stripes = new Object[stripeCount];
-        for (int i = 0; i < stripeCount; i++) {
-            stripes[i] = new Object();
-        }
+    private final ScheduledExecutorService cleaner;
+
+    protected AbstractRateLimiter(int maxKeys, long ttlMillis) {
         this.maxKeys = maxKeys;
         this.ttlNanos = ttlMillis * 1_000_000;
+
+        this.cleaner = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "rate-limiter-cleanup");
+            t.setDaemon(true);
+            return t;
+        });
+        cleaner.scheduleAtFixedRate(this::cleanupExpired, ttlMillis, ttlMillis, TimeUnit.MILLISECONDS);
     }
 
-    protected Object stripe(String key) {
-        return stripes[Math.abs(key.hashCode()) % stripes.length];
+    @Override
+    public void close() {
+        cleaner.shutdown();
     }
 
     protected boolean isKeyLimitExceeded(String key) {

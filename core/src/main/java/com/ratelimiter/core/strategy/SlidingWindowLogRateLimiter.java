@@ -1,15 +1,15 @@
 package com.ratelimiter.core.strategy;
 
+import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.concurrent.ConcurrentLinkedDeque;
 
 import com.ratelimiter.core.dtos.RateLimitResult;
 
 public class SlidingWindowLogRateLimiter extends AbstractRateLimiter {
 
     private static class LogState implements ExpirableState {
-        final Deque<Long> timestamps = new ConcurrentLinkedDeque<>();
-        volatile long lastAccess;
+        final Deque<Long> timestamps = new ArrayDeque<>();
+        long lastAccess;
 
         @Override
         public long getLastAccessNanos() {
@@ -19,15 +19,14 @@ public class SlidingWindowLogRateLimiter extends AbstractRateLimiter {
 
     private final long maxRequests;
     private final long windowNanos;
-    private final int hardCap; // safety cap per key
+    private final int hardCap;
 
     public SlidingWindowLogRateLimiter(long maxRequests,
                                          long windowMillis,
-                                         int stripeCount,
                                          int maxKeys,
                                          long ttlMillis,
                                          int hardCap) {
-        super(stripeCount, maxKeys, ttlMillis);
+        super(maxKeys, ttlMillis);
         this.maxRequests = maxRequests;
         this.windowNanos = windowMillis * 1_000_000;
         this.hardCap = hardCap;
@@ -45,45 +44,38 @@ public class SlidingWindowLogRateLimiter extends AbstractRateLimiter {
 
         long now = System.nanoTime();
 
-        LogState state = (LogState) store.computeIfAbsent(key, k -> {
-            LogState s = new LogState();
-            s.lastAccess = now;
-            return s;
-        });
+        final RateLimitResult[] out = {null};
 
-        Object lock = stripe(key);
-
-        synchronized (lock) {
-
+        store.compute(key, (k, existing) -> {
+            LogState state = existing == null ? new LogState() : (LogState) existing;
             state.lastAccess = now;
 
             Deque<Long> deque = state.timestamps;
 
-            while (!deque.isEmpty()) {
-                long oldest = deque.peekFirst();
-                if (now - oldest > windowNanos) {
-                    deque.pollFirst();
-                } else {
-                    break;
-                }
+            while (!deque.isEmpty() && now - deque.peekFirst() > windowNanos) {
+                deque.pollFirst();
             }
 
             if (deque.size() >= hardCap) {
                 long resetAt = (System.currentTimeMillis() / 1000) + 60;
-                return new RateLimitResult(false, 0, 0, limit, resetAt);
+                out[0] = new RateLimitResult(false, 0, 0, limit, resetAt);
+                return state;
             }
 
             if (deque.size() < maxRequests) {
                 deque.addLast(now);
                 long resetAt = (System.currentTimeMillis() / 1000) + 60;
-                return new RateLimitResult(true, maxRequests - deque.size(), 0, limit, resetAt);
+                out[0] = new RateLimitResult(true, maxRequests - deque.size(), 0, limit, resetAt);
+                return state;
             }
 
             long oldest = deque.peekFirst();
             long retryMillis = (windowNanos - (now - oldest)) / 1_000_000;
             long resetAt = (System.currentTimeMillis() + retryMillis) / 1000;
+            out[0] = new RateLimitResult(false, 0, retryMillis, limit, resetAt);
+            return state;
+        });
 
-            return new RateLimitResult(false, 0, retryMillis, limit, resetAt);
-        }
+        return out[0];
     }
 }

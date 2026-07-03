@@ -1,15 +1,14 @@
 package com.ratelimiter.core.strategy;
 
-import java.util.concurrent.atomic.LongAdder;
-
 import com.ratelimiter.core.dtos.RateLimitResult;
 
 public class FixedWindowRateLimiter extends AbstractRateLimiter {
 
     private static class WindowState implements ExpirableState {
-        volatile long windowStart;
-        final LongAdder counter = new LongAdder();
-        volatile long lastAccessNanos;
+        long windowStart;
+        long counter;
+        long lastAccessNanos;
+
         @Override
         public long getLastAccessNanos() {
             return lastAccessNanos;
@@ -21,10 +20,9 @@ public class FixedWindowRateLimiter extends AbstractRateLimiter {
 
     public FixedWindowRateLimiter(long maxRequests,
                                     long windowSizeMillis,
-                                    int stripes,
                                     int maxKeys,
                                     long ttlMillis) {
-        super(stripes, maxKeys, ttlMillis);
+        super(maxKeys, ttlMillis);
         this.maxRequests = maxRequests;
         this.windowSizeNanos = windowSizeMillis * 1_000_000;
     }
@@ -39,37 +37,38 @@ public class FixedWindowRateLimiter extends AbstractRateLimiter {
             return new RateLimitResult(false, 0, 0, limit, (System.currentTimeMillis() / 1000) + 60);
         }
 
-        WindowState state = (WindowState) store.computeIfAbsent(key, k -> {
-            WindowState ws = new WindowState();
-            ws.windowStart = now;
-            ws.lastAccessNanos = now;
-            return ws;
-        });
+        final RateLimitResult[] out = {null};
 
-        Object lock = stripe(key);
-
-        synchronized (lock) {
+        store.compute(key, (k, existing) -> {
+            WindowState state;
+            if (existing == null) {
+                state = new WindowState();
+                state.windowStart = now;
+            } else {
+                state = (WindowState) existing;
+            }
 
             state.lastAccessNanos = now;
 
             long elapsed = now - state.windowStart;
             if (elapsed >= windowSizeNanos) {
                 state.windowStart = now;
-                state.counter.reset();
+                state.counter = 0;
                 elapsed = 0;
             }
 
-            state.counter.increment();
-            long count = state.counter.sum();
+            long count = ++state.counter;
 
             long retryMillis = (windowSizeNanos - elapsed) / 1_000_000;
             long resetAt = (System.currentTimeMillis() + retryMillis) / 1000;
 
-            if (count <= maxRequests) {
-                return new RateLimitResult(true, maxRequests - count, 0, limit, resetAt);
-            }
+            out[0] = count <= maxRequests
+                    ? new RateLimitResult(true, maxRequests - count, 0, limit, resetAt)
+                    : new RateLimitResult(false, 0, retryMillis, limit, resetAt);
 
-            return new RateLimitResult(false, 0, retryMillis, limit, resetAt);
-        }
+            return state;
+        });
+
+        return out[0];
     }
 }
