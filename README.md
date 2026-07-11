@@ -391,7 +391,5 @@ Dynamic configuration (Admin API, `RuleCatalog`, pub/sub) is active only when `s
 
  The next iteration adds **operational visibility** — Prometheus metrics export, Grafana dashboards for allow/reject rates and Redis latency, and load-test harnesses to validate enforcement under concurrent traffic.
 
-See `core/docs/PHASE3_IMPLEMENTATION.md` for the Phase 3 design and verification checklist.
-
 ---
 
